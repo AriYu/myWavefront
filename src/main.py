@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-#from ctypes.wintypes import FLOAT
 import math
-from pickle import FALSE, TRUE
-from tkinter import Y
-from wsgiref.util import shift_path_info
 import numpy as np
 import random
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+
+import time
 
 from typing import Coroutine, Tuple
 from typing import List
@@ -136,54 +134,61 @@ class WaveFront(object):
     def __init__(self, collision_checker : CollisionChecker) -> None:
         self.vertexes : List[Sphere] = []
         self.edges : List[Edge] = []
-        self.prio_sphere_que : List[PrioritySphereQueueNode] = []
-        self.spheres : List[Sphere] = []
+        self.sphere_que : List[PrioritySphereQueueNode] = []
         self.collision_checker = collision_checker
 
     def search(self, start : Coordinate, goal : Coordinate, n: int) -> None:
         radius = self.collision_checker.getNearestDistance(start)
         sphere_node = Sphere(start, radius, None)
-        self.prio_sphere_que.append(PrioritySphereQueueNode(sphere_node, calcEuclidDistance(goal, start) - radius))
+        self.sphere_que.append(PrioritySphereQueueNode(sphere_node, calcEuclidDistance(goal, start) - radius))
 
         while True:
             # Get the sphere which is most close to the goal
-            most_close_to_goal_idx = get_the_most_lower_priority_index(self.prio_sphere_que)
-            prio_sphere_node = self.prio_sphere_que.pop(most_close_to_goal_idx)
-            self.vertexes.append(prio_sphere_node.sphere)
-            self.edges.append(Edge(prio_sphere_node.sphere.parent, prio_sphere_node.sphere))
+            self.sphere_que.sort(key=lambda x: x.priority, reverse=True) # sort as descending order
+            #sphere_node = self.sphere_que.pop() # get last item from sorted list and remove that. Original method
+            sphere_node = self.sphere_que[-1] # get last item from but doesn't remove. My method.
+            self.vertexes.append(sphere_node.sphere)
+            self.edges.append(Edge(sphere_node.sphere.parent, sphere_node.sphere))
 
             # Check whether is the sphere reaching the goal.
-            if (calcEuclidDistance(goal, prio_sphere_node.sphere.center) < prio_sphere_node.sphere.radius):
-                self.edges.append(Edge(prio_sphere_node.sphere, Sphere(goal, 0, prio_sphere_node.sphere)))
+            if (calcEuclidDistance(goal, sphere_node.sphere.center) < sphere_node.sphere.radius):
+                self.edges.append(Edge(sphere_node.sphere, Sphere(goal, 0, sphere_node.sphere)))
                 return #Tree(V, E)
 
             # Sample n points on shpere surface
+            added_counter = 0
             for i in range(n):
-                qnew = Coordinate(0,0)
-                theta = random.random() * 2 * math.pi
-                qnew.x = prio_sphere_node.sphere.center.x + prio_sphere_node.sphere.radius * math.cos(theta)
-                qnew.y = prio_sphere_node.sphere.center.y + prio_sphere_node.sphere.radius * math.sin(theta)
+                theta = random.random() * 2.0 * math.pi
+                qnew = Coordinate(sphere_node.sphere.center.x + sphere_node.sphere.radius * math.cos(theta),
+                                  sphere_node.sphere.center.y + sphere_node.sphere.radius * math.sin(theta))
                 is_outside = True
                 # Check the sphere is not inside other spheres
                 for existing_sphere in self.vertexes:
+                    if existing_sphere is sphere_node:
+                        continue
                     if calcEuclidDistance(qnew, existing_sphere.center) < existing_sphere.radius:
                         is_outside = False
                         break
-                if is_outside == True:
-                    new_rudius = self.collision_checker.getNearestDistance(qnew)
-                    if (new_rudius < 5.0): # Reject the too small sphere
-                        continue
-                    sphere = Sphere(qnew, new_rudius, prio_sphere_node.sphere)
-                    self.prio_sphere_que.append(PrioritySphereQueueNode(sphere, calcEuclidDistance(goal, qnew) - new_rudius))
+                if is_outside == False:
+                    continue
+                new_rudius = self.collision_checker.getNearestDistance(qnew)
+                if (new_rudius < 2.0): # Reject the too small sphere
+                    continue
+                new_sphere = Sphere(qnew, new_rudius, sphere_node.sphere)
+                self.sphere_que.append(PrioritySphereQueueNode(new_sphere, calcEuclidDistance(goal, qnew) - new_rudius))
+                added_counter += 1
+            
+            # My method: If we cannot add any samples against the sphere, make priority low the sphere in order to select other sphere in next loop.
+            if (added_counter == 0):
+                self.sphere_que[-1].priority += self.sphere_que[-1].sphere.radius  #add penalty
 
-            if (len(self.prio_sphere_que) == 0):
+            if (len(self.sphere_que) == 0):
+                print("sphere_que length is zero!")
                 break
 
-            self.plot() # debug
         return
 
     def plot(self) -> None:
-        #print("x :" +  str(self.sphere.center.x) + ", y:" + str(self.sphere.center.y) + ", r:" + str(self.sphere.radius))
         for sphere in self.vertexes:
             c = patches.Circle(xy=(sphere.center.x, sphere.center.y), radius=sphere.radius, fc='g', ec='r', fill=False)
             ax.add_patch(c)
@@ -193,7 +198,7 @@ class WaveFront(object):
 
 
 def main():
-    random.seed(1)
+    #random.seed(1)
     print("{} start !".format(__file__))
 
     sx = 10.0
@@ -236,7 +241,10 @@ def main():
 
     start = Coordinate(sx, sy)
     goal = Coordinate(gx, gy)
-    wave_front_explorer.search(start, goal, 50)
+    start_time = time.perf_counter_ns()
+    wave_front_explorer.search(start, goal, 3)
+    elapsed = time.perf_counter_ns() - start_time
+    print("elapsed time: {0} ms".format(elapsed*1e-6))
     wave_front_explorer.plot()
 
     if show_animation:
