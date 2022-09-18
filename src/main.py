@@ -1,12 +1,16 @@
-from ctypes.wintypes import FLOAT
+from __future__ import annotations
+
+#from ctypes.wintypes import FLOAT
 import math
+from pickle import FALSE, TRUE
 from tkinter import Y
+from wsgiref.util import shift_path_info
 import numpy as np
 import random
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-from typing import Tuple
+from typing import Coroutine, Tuple
 from typing import List
 
 show_animation = True
@@ -15,22 +19,14 @@ if show_animation:
     ax = plt.axes()
 
 class Edge:
-    def __init__(self, to : int, w : float) -> None:
-        self.to = to # 隣接頂点番号
-        self.w = w # 重み
+    def __init__(self, parent : Sphere, child : Sphere) -> None:
+        self.parent = parent
+        self.child = child
 
 class Node:
     def __init__(self, x : float, y : float) -> None:
         self.x = x
         self.y = y
-        self.edges : List[Edge] = []
-
-    def addEdge(self, edge) -> None:
-        self.edges.append(edge)
-
-    def addEdge(self, to : int, cost : float) -> None:
-        edge = Edge(to, cost)
-        self.edges.append(edge)
 
     def __str__(self) -> str:
         return str(self.x) + ", " + str(self.y)
@@ -41,9 +37,15 @@ class Coordinate:
         self.y = y
 
 class Sphere:
-    def __init__(self, center: Coordinate, radius : float) -> None:
+    def __init__(self, center: Coordinate, radius : float, parent: Sphere) -> None:
         self.center = center
         self.radius = radius
+        self.parent = parent
+
+class PrioritySphereQueueNode:
+    def __init__(self, sphere: Sphere, priority: float) -> None:
+        self.sphere = sphere
+        self.priority = priority
 
 def searchNearestFromList(sample_x : float, sample_y : float, ox : list[float], oy : list[float]) -> Tuple[int, float] :
     min_index = 0
@@ -55,6 +57,9 @@ def searchNearestFromList(sample_x : float, sample_y : float, ox : list[float], 
             min_index = i
 
     return min_index, min_dist
+
+def calcEuclidDistance(p1: Coordinate, p2: Coordinate) -> float:
+    return math.sqrt((p1.x-p2.x)**2.0 + (p1.y-p2.y)**2.0)
 
 class CollisionChecker(object):
     """
@@ -74,7 +79,7 @@ class CollisionChecker(object):
         self.max_y : float = max(oy)
         self.min_y : float = min(oy)
 
-    def isCollision(self, p : Node) -> bool:
+    def isCollision(self, p : Coordinate) -> bool:
         """
         If there are ox or oy in radius rr, return True (colliding)
         """
@@ -84,8 +89,7 @@ class CollisionChecker(object):
         else:
             return False # no collide
 
-
-    def isCollisionPath(self, p0 : Node, p1 : Node) -> bool:
+    def isCollisionPath(self, p0 : Coordinate, p1 : Coordinate) -> bool:
         """
         p0, p1 : the vertexes which compromize a line
         Check collision between the line and ox, oy by rr.
@@ -114,34 +118,78 @@ class CollisionChecker(object):
     def getNearestDistance(self, pos: Coordinate) -> float:
         max_distance = 1000000.0 # should be max...
         for x, y in zip(self.ox, self.oy):
-            dist = math.sqrt((x-pos.x)**2.0 + (y-pos.y)**2.0)
+            dist = calcEuclidDistance(Coordinate(x,y), pos)
             if (dist < max_distance):
                 max_distance = dist
         return max_distance
 
+def get_the_most_lower_priority_index(queue : List[PrioritySphereQueueNode]) -> int:
+    index = 0
+    prio = queue[0].priority
+    for idx, node in enumerate(queue):
+        if  node.priority < prio:
+            index = idx
+    return index
+
 class WaveFront(object):
 
     def __init__(self, collision_checker : CollisionChecker) -> None:
-        self.graph : List[Node] = []
+        self.vertexes : List[Sphere] = []
+        self.edges : List[Edge] = []
+        self.prio_sphere_que : List[PrioritySphereQueueNode] = []
         self.spheres : List[Sphere] = []
         self.collision_checker = collision_checker
 
     def search(self, start : Coordinate, goal : Coordinate, n: int) -> None:
-        self.spheres.append(Sphere(start, self.collision_checker.getNearestDistance(start)))
+        radius = self.collision_checker.getNearestDistance(start)
+        sphere_node = Sphere(start, radius, None)
+        self.prio_sphere_que.append(PrioritySphereQueueNode(sphere_node, calcEuclidDistance(goal, start) - radius))
 
-        for i in range(10):
-            qnew = Coordinate(0,0)
-            qnew.x = (random.random() * (self.collision_checker.max_x - self.collision_checker.min_x)) + self.collision_checker.min_x
-            qnew.y = (random.random() * (self.collision_checker.max_y - self.collision_checker.min_y)) + self.collision_checker.min_y
-            self.spheres.append(Sphere(qnew, self.collision_checker.getNearestDistance(qnew)))
+        while True:
+            # Get the sphere which is most close to the goal
+            most_close_to_goal_idx = get_the_most_lower_priority_index(self.prio_sphere_que)
+            prio_sphere_node = self.prio_sphere_que.pop(most_close_to_goal_idx)
+            self.vertexes.append(prio_sphere_node.sphere)
+            self.edges.append(Edge(prio_sphere_node.sphere.parent, prio_sphere_node.sphere))
 
+            # Check whether is the sphere reaching the goal.
+            if (calcEuclidDistance(goal, prio_sphere_node.sphere.center) < prio_sphere_node.sphere.radius):
+                self.edges.append(Edge(prio_sphere_node.sphere, Sphere(goal, 0, prio_sphere_node.sphere)))
+                return #Tree(V, E)
+
+            # Sample n points on shpere surface
+            for i in range(n):
+                qnew = Coordinate(0,0)
+                theta = random.random() * 2 * math.pi
+                qnew.x = prio_sphere_node.sphere.center.x + prio_sphere_node.sphere.radius * math.cos(theta)
+                qnew.y = prio_sphere_node.sphere.center.y + prio_sphere_node.sphere.radius * math.sin(theta)
+                is_outside = True
+                # Check the sphere is not inside other spheres
+                for existing_sphere in self.vertexes:
+                    if calcEuclidDistance(qnew, existing_sphere.center) < existing_sphere.radius:
+                        is_outside = False
+                        break
+                if is_outside == True:
+                    new_rudius = self.collision_checker.getNearestDistance(qnew)
+                    if (new_rudius < 5.0): # Reject the too small sphere
+                        continue
+                    sphere = Sphere(qnew, new_rudius, prio_sphere_node.sphere)
+                    self.prio_sphere_que.append(PrioritySphereQueueNode(sphere, calcEuclidDistance(goal, qnew) - new_rudius))
+
+            if (len(self.prio_sphere_que) == 0):
+                break
+
+            self.plot() # debug
         return
 
     def plot(self) -> None:
         #print("x :" +  str(self.sphere.center.x) + ", y:" + str(self.sphere.center.y) + ", r:" + str(self.sphere.radius))
-        for sphere in self.spheres:
-            c = patches.Circle(xy=(sphere.center.x, sphere.center.y), radius=sphere.radius, fc='g', ec='r')
+        for sphere in self.vertexes:
+            c = patches.Circle(xy=(sphere.center.x, sphere.center.y), radius=sphere.radius, fc='g', ec='r', fill=False)
             ax.add_patch(c)
+        for edge in self.edges:
+            if edge.parent != None and edge.child != None:
+                plt.plot([edge.parent.center.x, edge.child.center.x], [edge.parent.center.y, edge.child.center.y])
 
 
 def main():
@@ -188,7 +236,7 @@ def main():
 
     start = Coordinate(sx, sy)
     goal = Coordinate(gx, gy)
-    wave_front_explorer.search(start, goal, 5)
+    wave_front_explorer.search(start, goal, 50)
     wave_front_explorer.plot()
 
     if show_animation:
