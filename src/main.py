@@ -194,7 +194,7 @@ class WaveFront(object):
             ax.add_patch(c)
         for edge in self.edges:
             if edge.parent != None and edge.child != None:
-                plt.plot([edge.parent.center.x, edge.child.center.x], [edge.parent.center.y, edge.child.center.y])
+                plt.plot([edge.parent.center.x, edge.child.center.x], [edge.parent.center.y, edge.child.center.y], 'b')
 
 
 def main():
